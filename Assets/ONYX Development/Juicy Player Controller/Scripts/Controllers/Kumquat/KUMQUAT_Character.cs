@@ -4,7 +4,7 @@ using UnityEngine.InputSystem;
 // TODO:
 // - Add tooltips to all variable to explain what they do.
 // - Add coyote time.
-// - Add jump sustain.
+// - Add jump buffering.
 
 namespace ONYX
 {
@@ -41,6 +41,8 @@ namespace ONYX
 
         [Header ("Settings/Walk")]
         [SerializeField] private float _walkSpeed = 15f;
+        [SerializeField] private float _walkResponce = 15f;
+        [SerializeField] private float _walkDamping = 0.9f;
         [SerializeField] private float _walkHeight = 1f;
 
         [Header ("Settings/Jump")]
@@ -86,12 +88,14 @@ namespace ONYX
             DoLook();
 
             UpdateGroundState();
+            UpdatePlayerState();
 
             DoGravityAndJump();
+
+            DoLocomotion();
+            ApplyDamping();
             
             transform.position += _currentVelocity * Time.deltaTime;
-
-            _lastGroundState = _groundState;
         }
 
         private void DoLook()
@@ -126,7 +130,13 @@ namespace ONYX
                 _groundState = GroundState.InAir;
         }
 
-        private void DoGravityAndJump(){
+        private void UpdatePlayerState()
+        {
+
+        }
+
+        private void DoGravityAndJump()
+        {
             _effectiveGravity = _gravity;
             if(_requestSustainJump && Vector3.Dot(_currentVelocity, transform.up) > 0)
                 _effectiveGravity *= _jumpSustainGravity;
@@ -149,7 +159,74 @@ namespace ONYX
             {
                 _currentVelocity.y = 0;
             }
+
+            _lastGroundState = _groundState;
         }
+
+        private void DoLocomotion()
+        {
+            // Compute the desired movement vector
+            Vector2 moveInputWithSpeed = _moveInput * _walkResponce * Time.deltaTime;
+            Vector3 desiredMoveVector = new Vector3(moveInputWithSpeed.x, 0, moveInputWithSpeed.y);
+
+            // Apply the player's rotation to the movement vector
+            Quaternion playerRotation = Quaternion.LookRotation(transform.forward);
+            Vector3 rotatedMoveVector = playerRotation * desiredMoveVector;
+
+            // Adjust movement for the ground normal if grounded
+            if (_groundState == GroundState.Grounded && Physics.Raycast(transform.position, Vector3.down, out RaycastHit hit, Mathf.Infinity))
+            {
+                Vector3 groundNormal = hit.normal;
+                Quaternion groundRotation = Quaternion.FromToRotation(Vector3.up, groundNormal);
+                rotatedMoveVector = groundRotation * rotatedMoveVector;
+            }
+
+            // Calculate the horizontal movement (x and z) components
+            Vector3 horizontalMove = new Vector3(rotatedMoveVector.x, 0, rotatedMoveVector.z);
+
+            // Apply gradual acceleration
+            if (horizontalMove.magnitude > 0)
+            {
+                // Gradually increase speed to walk speed
+                Vector3 targetVelocity = horizontalMove.normalized * _walkSpeed;
+                _currentVelocity = Vector3.MoveTowards(_currentVelocity, targetVelocity, _walkResponce * Time.deltaTime);
+            }
+            else
+            {
+                // When no input, apply damping
+                ApplyDamping();
+            }
+
+            // Ensure the y component of velocity remains unaffected by this process
+            _currentVelocity.y = _currentVelocity.y;
+        }
+
+        private void ApplyDamping()
+        {
+            // Apply damping only if there's significant movement
+            if (_currentVelocity.magnitude > 0)
+            {
+                // Calculate the damping factor
+                float dampAmount = _walkDamping * Time.deltaTime;
+
+                // Dampen the velocity in the direction of current movement
+                Vector3 velocityDirection = _currentVelocity.normalized;
+                Vector3 dampenedVelocity = _currentVelocity - velocityDirection * dampAmount;
+
+                // Clamp the dampened velocity to ensure it slows down smoothly
+                if (Vector3.Dot(dampenedVelocity, velocityDirection) <= 0)
+                {
+                    // If the velocity is nearly zero or changes direction, set to zero
+                    _currentVelocity = Vector3.zero;
+                }
+                else
+                {
+                    _currentVelocity = dampenedVelocity;
+                }
+            }
+        }
+
+
 
         #region INPUTS
         public void LocomotionInput(InputAction.CallbackContext ctx)

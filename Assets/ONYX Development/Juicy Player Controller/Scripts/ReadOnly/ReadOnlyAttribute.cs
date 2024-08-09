@@ -1,5 +1,6 @@
 using UnityEngine;
 
-namespace ONYX {
+namespace ONYX
+{
     public class ReadOnlyAttribute : PropertyAttribute { }
 }

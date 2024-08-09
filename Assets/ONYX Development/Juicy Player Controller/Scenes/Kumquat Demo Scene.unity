@@ -183,10 +183,11 @@ MonoBehaviour:
   _slideEndSpeed: 10
   _slideFriction: 0.9
   _walkSpeed: 15
+  _walkResponce: 15
   _walkHeight: 1
-  _jumpSpeed: 5
-  _gravity: -9.81
-  _groundCheckBuffer: 0.05
+  _jumpSpeed: 7.5
+  _gravity: -19.62
+  _jumpSustainGravity: 0.5
   _camera: {fileID: 0}
   _cameraTarget: {fileID: 0}
   _playerState: 0
@@ -195,9 +196,11 @@ MonoBehaviour:
   _currentVelocity: {x: 0, y: 0, z: 0}
   _playerHeight: 1
   _leftGroundBecauseOfJump: 0
+  _effectiveGravity: 0
   _moveInput: {x: 0, y: 0}
   _lookInput: {x: 0, y: 0}
   _requestedJump: 0
+  _requestSustainJump: 0
   _slideInput: 0
   _crouchInput: 0
 --- !u!114 &134925442
