@@ -1,260 +1,184 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
 
-// TODO:
-// - Add tooltips to all variable to explain what they do.
-// - Add coyote time.
-// - Add jump buffering.
-
-namespace ONYX
+namespace ONYX 
 {
     public class KUMQUAT_Character : MonoBehaviour
     {
-        private enum PlayerState {
+        private enum PlayerState
+        {
             Crouching,
             Sliding,
             Walking
         }
 
-        private enum GroundState {
-            Grounded,
-            InAir
-        }
+        [HideInInspector] public static KUMQUAT_Character instance;
 
-        [Header ("Settings/Look")]
-        [SerializeField] private bool _lockCursorOnAwake = true;
-        [SerializeField] private bool _isYAxisInverted = false;
+        [Header ("Mouse Lock")]
+        [SerializeField] private bool auto_lock_cursor = true;
 
-        [SerializeField] private Vector2 _lookSensitivity = new Vector2(20, 20);
+        [Header ("Camera Look")]
+        [SerializeField] private float mouse_sensitivity = 250f;
 
-        [Range (-90, 90)] [SerializeField] private float _minLookAngle = -90f;
-        [Range (-90, 90)] [SerializeField] private float _maxLookAngle = 90f;
+        [Header ("Jump")]
+        [SerializeField] private float jump_height = 1.5f;
+        [SerializeField] private float gravity = -9.81f;
 
-        [Header ("Settings/Crouch")]
-        [SerializeField] private float _crouchSpeed = 10f;
-        [SerializeField] private float _crouchHeight = 0.5f;
-
-        [Header ("Settings/Slide")]
-        [SerializeField] private float _slideStartSpeed = 20f;
-        [SerializeField] private float _slideEndSpeed = 10f;
-        [SerializeField] private float _slideFriction = 0.9f;
-
-        [Header ("Settings/Walk")]
-        [SerializeField] private float _walkSpeed = 15f;
-        [SerializeField] private float _walkResponce = 15f;
-        [SerializeField] private float _walkDamping = 0.9f;
+        [Header ("Walk")]
+        [SerializeField] private float walk_speed = 4f;
         [SerializeField] private float _walkHeight = 1f;
 
-        [Header ("Settings/Jump")]
-        [SerializeField] private float _jumpSpeed = 7.5f;
-        [SerializeField] private float _gravity = -19.62f;
-        [Range (0, 1)]
-        [SerializeField] private float _jumpSustainGravity = 0.5f;
+        [Header ("Crouch")]
+        [SerializeField] private float crouch_speed = 2f;
+        [SerializeField] private float crouch_height = 0.5f;
 
-        [Header ("Debug/References")]
-        [ReadOnly, SerializeField] private KUMQUAT_Camera _camera;
+        [Header ("Debug (read-only)")]
+        [ReadOnly, SerializeField] private PlayerState state;
+        [ReadOnly, SerializeField] private Vector3 velocity;
+        [ReadOnly, SerializeField] private float speed;
+        [ReadOnly, SerializeField] private float _currentHeight;
+        [ReadOnly, SerializeField] private bool is_grounded;
         [ReadOnly, SerializeField] private Transform _cameraTarget;
+        [ReadOnly, SerializeField] private CharacterController controller;
+        [ReadOnly, SerializeField] private float cam_x_rotation;
+        [ReadOnly, SerializeField] private bool all_checks_passed;
 
-        [Header ("Debug/States")]
-        [ReadOnly, SerializeField] private PlayerState _playerState;
-        [ReadOnly, SerializeField] private GroundState _groundState;
-        [ReadOnly, SerializeField] private GroundState _lastGroundState;
+        private Vector2 _moveInput;
+        private Vector2 _lookInput;
+        private bool _slideInput;
+        private bool _jumpInput;
+        private bool crouch_input;
 
-        [Header ("Debug/Other")]
-        [ReadOnly, SerializeField] private Vector3 _currentVelocity;
-        [ReadOnly, SerializeField] private float _playerHeight = 1; // REMOVE: remove the "= 1" after the states are implamentd.
-        [ReadOnly, SerializeField] private bool _leftGroundBecauseOfJump;
-        [ReadOnly, SerializeField] private float _effectiveGravity;
-
-        [Header ("Debug/Inputs")]
-        [ReadOnly, SerializeField] private Vector2 _moveInput;
-        [ReadOnly, SerializeField] private Vector2 _lookInput;
-        [ReadOnly, SerializeField] private bool _requestedJump;
-        [ReadOnly, SerializeField] private bool _requestSustainJump;
-        [ReadOnly, SerializeField] private bool _slideInput;
-        [ReadOnly, SerializeField] private bool _crouchInput;
-
-        private void Awake()
-        {
-            _camera = transform.parent.GetComponentInChildren<KUMQUAT_Camera>();
+        private void Awake(){
+            instance = this;
+            
             _cameraTarget = GetComponentInChildren<KUMQUAT_Camera_Target>().transform;
+            controller = gameObject.GetComponent<CharacterController>();
 
-            if(_lockCursorOnAwake)
-                Cursor.lockState = CursorLockMode.Locked;
+            RunChecks();
         }
 
-        private void Update()
-        {
-            DoLook();
+        private void Start(){
+            if(auto_lock_cursor){ Cursor.lockState = CursorLockMode.Locked; }
+        }
 
-            UpdateGroundState();
+        private void Update(){
+            if(!all_checks_passed){ return; }
+
+            DoCameraLook();
+
+            is_grounded = Physics.Raycast(transform.position, -transform.up, out RaycastHit hit, _currentHeight + 0.2f);
+
+            // if(is_grounded && velocity.y < 0){
+            //     velocity.y = -2f;
+            // }
+
+            Vector3 move = transform.right * _moveInput.x + transform.forward * _moveInput.y; 
+
             UpdatePlayerState();
 
-            DoGravityAndJump();
+            DoWalking(state == PlayerState.Walking);
+            DoCrouching(state == PlayerState.Crouching);
 
-            DoLocomotion();
-            ApplyDamping();
-            
-            transform.position += _currentVelocity * Time.deltaTime;
-        }
+            controller.Move(move * speed * Time.deltaTime);
 
-        private void DoLook()
-        {
-            Vector2 lookWithSensitivity = _lookInput * _lookSensitivity * Time.deltaTime;
-
-            if (!_isYAxisInverted)
-                lookWithSensitivity.y *= -1;
-
-            Vector3 currentLook = _cameraTarget.localRotation.eulerAngles;
-
-            float currentPitch = currentLook.x;
-            if (currentPitch > 180f) currentPitch -= 360f;
-
-            float newXRotation = currentPitch + lookWithSensitivity.y;
-
-            newXRotation = Mathf.Clamp(newXRotation, _minLookAngle, _maxLookAngle);
-
-            float newYRotation = transform.rotation.eulerAngles.y + lookWithSensitivity.x;
-
-            _cameraTarget.localRotation = Quaternion.Euler(newXRotation, 0, 0);
-            transform.rotation = Quaternion.Euler(0, newYRotation, 0);
-        }
-
-        private void UpdateGroundState()
-        {
-            float rayDistance = _playerHeight;
-
-            if (Physics.Raycast(transform.position, Vector3.down, rayDistance))
-                _groundState = GroundState.Grounded;
-            else
-                _groundState = GroundState.InAir;
-        }
-
-        private void UpdatePlayerState()
-        {
-
-        }
-
-        private void DoGravityAndJump()
-        {
-            _effectiveGravity = _gravity;
-            if(_requestSustainJump && Vector3.Dot(_currentVelocity, transform.up) > 0)
-                _effectiveGravity *= _jumpSustainGravity;
-
-            _currentVelocity.y += _effectiveGravity * Time.deltaTime;
-
-            if(_groundState == GroundState.Grounded && _lastGroundState == GroundState.InAir) _leftGroundBecauseOfJump = false;
-
-            if(_requestedJump && _groundState == GroundState.Grounded)
-            {
-                var currentVerticalSpeed = Vector3.Dot(_currentVelocity, transform.up);
-                var targetVerticalSpeed = Mathf.Max(currentVerticalSpeed, _jumpSpeed);
-                _currentVelocity += transform.up * (targetVerticalSpeed - currentVerticalSpeed);
-
-                _requestedJump = false;
-                _leftGroundBecauseOfJump = true;
+            if(_jumpInput && is_grounded){
+                velocity.y = Mathf.Sqrt(jump_height * -2 * gravity);
+                _jumpInput = false; // Reset jump input after jump is processed
             }
 
-            if(_groundState == GroundState.Grounded && !_leftGroundBecauseOfJump)
-            {
-                _currentVelocity.y = 0;
-            }
+            velocity.y += gravity * Time.deltaTime;
 
-            _lastGroundState = _groundState;
+            controller.Move(velocity * Time.deltaTime);
         }
 
-        private void DoLocomotion()
-        {
-            // Compute the desired movement vector
-            Vector2 moveInputWithSpeed = _moveInput * _walkResponce * Time.deltaTime;
-            Vector3 desiredMoveVector = new Vector3(moveInputWithSpeed.x, 0, moveInputWithSpeed.y);
+        private void RunChecks(){
+            all_checks_passed = true;
 
-            // Apply the player's rotation to the movement vector
-            Quaternion playerRotation = Quaternion.LookRotation(transform.forward);
-            Vector3 rotatedMoveVector = playerRotation * desiredMoveVector;
-
-            // Adjust movement for the ground normal if grounded
-            if (_groundState == GroundState.Grounded && Physics.Raycast(transform.position, Vector3.down, out RaycastHit hit, Mathf.Infinity))
-            {
-                Vector3 groundNormal = hit.normal;
-                Quaternion groundRotation = Quaternion.FromToRotation(Vector3.up, groundNormal);
-                rotatedMoveVector = groundRotation * rotatedMoveVector;
-            }
-
-            // Calculate the horizontal movement (x and z) components
-            Vector3 horizontalMove = new Vector3(rotatedMoveVector.x, 0, rotatedMoveVector.z);
-
-            // Apply gradual acceleration
-            if (horizontalMove.magnitude > 0)
-            {
-                // Gradually increase speed to walk speed
-                Vector3 targetVelocity = horizontalMove.normalized * _walkSpeed;
-                _currentVelocity = Vector3.MoveTowards(_currentVelocity, targetVelocity, _walkResponce * Time.deltaTime);
-            }
-            else
-            {
-                // When no input, apply damping
-                ApplyDamping();
-            }
-
-            // Ensure the y component of velocity remains unaffected by this process
-            _currentVelocity.y = _currentVelocity.y;
-        }
-
-        private void ApplyDamping()
-        {
-            // Apply damping only if there's significant movement
-            if (_currentVelocity.magnitude > 0)
-            {
-                // Calculate the damping factor
-                float dampAmount = _walkDamping * Time.deltaTime;
-
-                // Dampen the velocity in the direction of current movement
-                Vector3 velocityDirection = _currentVelocity.normalized;
-                Vector3 dampenedVelocity = _currentVelocity - velocityDirection * dampAmount;
-
-                // Clamp the dampened velocity to ensure it slows down smoothly
-                if (Vector3.Dot(dampenedVelocity, velocityDirection) <= 0)
-                {
-                    // If the velocity is nearly zero or changes direction, set to zero
-                    _currentVelocity = Vector3.zero;
-                }
-                else
-                {
-                    _currentVelocity = dampenedVelocity;
-                }
+            if(controller == null){ all_checks_passed = false;
+                Debug.LogError("Juicy Controller > No \"Character Controller\" found. Did you add one to this same GameObject?");
             }
         }
 
+        private void UpdatePlayerState(){
+            state = PlayerState.Walking;
+            if(crouch_input){ state = PlayerState.Crouching; }
+        }
 
+        private void DoWalking(bool walking){
+            if(walking){
+                speed = walk_speed;
+            }
+        }
 
-        #region INPUTS
-        public void LocomotionInput(InputAction.CallbackContext ctx)
-        {
+        private void DoCrouching(bool crouching){
+            if(crouching){
+                speed = crouch_speed;
+                _currentHeight = crouch_height;
+            }else{
+                _currentHeight = _walkHeight;
+            }
+
+            Vector3 new_scale = transform.localScale;
+            new_scale.y = _currentHeight;
+            transform.localScale = new_scale;
+        }
+
+        private void DoCameraLook(){
+            float mouse_x = _lookInput.x * mouse_sensitivity * Time.deltaTime;
+            float mouse_y = _lookInput.y * mouse_sensitivity * Time.deltaTime;
+
+            cam_x_rotation -= mouse_y;
+            cam_x_rotation = Mathf.Clamp(cam_x_rotation, -90f, 90f);
+
+            _cameraTarget.localRotation = Quaternion.Euler(cam_x_rotation, 0f, 0f);
+            transform.Rotate(Vector3.up * mouse_x);
+        }
+
+        public void LocomotionInput(InputAction.CallbackContext ctx){
             _moveInput = ctx.ReadValue<Vector2>();
         }
 
-        public void LookInput(InputAction.CallbackContext ctx)
-        {
+        public void LookInput(InputAction.CallbackContext ctx){
             _lookInput = ctx.ReadValue<Vector2>();
         }
 
-        public void JumpInput(InputAction.CallbackContext ctx)
-        {
-            _requestSustainJump = ctx.ReadValueAsButton();
-            if(ctx.performed)
-                _requestedJump = true;
+        public void JumpInput(InputAction.CallbackContext ctx){
+            if(ctx.performed){
+                _jumpInput = true;
+            }
         }
 
-        public void SlideInput(InputAction.CallbackContext ctx)
-        {
+        public void SlideInput(InputAction.CallbackContext ctx){
             _slideInput = ctx.ReadValueAsButton();
         }
 
-        public void CrouchInput(InputAction.CallbackContext ctx)
-        {
-            _crouchInput = ctx.ReadValueAsButton();
+        public void CrouchInput(InputAction.CallbackContext ctx){
+            crouch_input = ctx.ReadValueAsButton();
         }
+
+        #region api
+
+        #region set
+        public void SetMouseSensitivity(float new_sensitivity){ mouse_sensitivity = new_sensitivity; }
+        public void SetJumpHeight(float new_jump_height){ jump_height = new_jump_height; }
+        public void SetGravity(float new_gravity){ gravity = new_gravity; }
+        public void SetWalkSpeed(float new_walk_speed){ walk_speed = new_walk_speed; }
+        public void SetCrouchSpeed(float new_crouch_speed){ crouch_speed = new_crouch_speed; }
+        public void SetDefaultHeight(float new__walkHeight){ _walkHeight = new__walkHeight; }
+        public void SetCrouchHeight(float new_crouch_height){ crouch_height = new_crouch_height; }
+        #endregion
+
+        #region get
+        public float GetMouseSensitivity(){ return mouse_sensitivity; }
+        public float GetJumpHeight(){ return jump_height; }
+        public float GetGravity(){ return gravity; }
+        public float GetWalkSpeed(){ return walk_speed; }
+        public float GetCrouchSpeed(){ return crouch_speed; }
+        public float GetDefaultHeight(){ return _walkHeight; }
+        public float GetCrouchHeight(){ return crouch_height; }
+        #endregion
+
         #endregion
     }
 }
