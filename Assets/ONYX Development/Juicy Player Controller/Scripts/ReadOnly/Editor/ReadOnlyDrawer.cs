@@ -1,6 +1,6 @@
-using UnityEngine;
-
 #if UNITY_EDITOR
+
+using UnityEngine;
 using UnityEditor;
 
 namespace ONYX {
@@ -9,9 +9,9 @@ namespace ONYX {
     {
         public override void OnGUI(Rect position, SerializedProperty property, GUIContent label)
         {
-            GUI.enabled = false; // Disable editing
+            GUI.enabled = false;
             EditorGUI.PropertyField(position, property, label, true);
-            GUI.enabled = true; // Enable editing back
+            GUI.enabled = true;
         }
     }
 }
